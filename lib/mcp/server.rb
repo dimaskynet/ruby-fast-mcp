@@ -1,29 +1,32 @@
 # frozen_string_literal: true
 
-require 'json'
-require 'logger'
-require 'securerandom'
-require 'base64'
-require_relative 'transports/stdio_transport'
-require_relative 'transports/rack_transport'
-require_relative 'transports/authenticated_rack_transport'
-require_relative 'logger'
-require_relative 'server_filtering'
+require "json"
+require "logger"
+require "securerandom"
+require "base64"
+require_relative "transports/stdio_transport"
+require_relative "transports/rack_transport"
+require_relative "transports/authenticated_rack_transport"
+require_relative "logger"
+require_relative "server_filtering"
 
 module FastMcp
   class Server
     include ServerFiltering
 
-    attr_reader :name, :version, :tools, :resources, :capabilities
+    attr_reader :name, :version, :tools, :resources, :prompts, :capabilities
 
     DEFAULT_CAPABILITIES = {
       resources: {
         subscribe: true,
-        listChanged: true
+        listChanged: true,
       },
       tools: {
-        listChanged: true
-      }
+        listChanged: true,
+      },
+      prompts: {
+        listChanged: true,
+      },
     }.freeze
 
     def initialize(name:, version:, logger: FastMcp::Logger.new, capabilities: {})
@@ -31,6 +34,7 @@ module FastMcp
       @version = version
       @tools = {}
       @resources = []
+      @prompts = {}
       @resource_subscriptions = {}
       @logger = logger
       @request_id = 0
@@ -43,6 +47,7 @@ module FastMcp
       # Merge with provided capabilities
       @capabilities.merge!(capabilities) if capabilities.is_a?(Hash)
     end
+
     attr_accessor :transport, :transport_klass, :logger
 
     # Register multiple tools at once
@@ -80,6 +85,41 @@ module FastMcp
       resource
     end
 
+    # Register multiple prompts at once
+    # @param prompts [Array<Prompt>] Prompts to register
+    def register_prompts(*prompts)
+      prompts.each do |prompt|
+        register_prompt(prompt)
+      end
+    end
+
+    # Register a prompt with the server
+    def register_prompt(prompt)
+      @prompts[prompt.name] = prompt
+      @logger.debug("Registered prompt: #{prompt.name}")
+
+      # Notify clients about the list change
+      notify_prompts_list_changed if @transport
+
+      prompt
+    end
+
+    # Remove a prompt from the server
+    def unregister_prompt(name)
+      if @prompts.key?(name)
+        prompt = @prompts.delete(name)
+        @logger.debug("Unregistered prompt: #{name}")
+
+        # Notify clients about the list change
+        notify_prompts_list_changed if @transport
+
+        prompt
+      else
+        @logger.warn("Prompt #{name} not found")
+        nil
+      end
+    end
+
     # Remove a resource from the server
     def remove_resource(uri)
       resource = @resources.find { |r| r.uri == uri }
@@ -101,8 +141,8 @@ module FastMcp
     def start
       @logger.transport = :stdio
       @logger.info("Starting MCP server: #{@name} v#{@version}")
-      @logger.info("Available tools: #{@tools.keys.join(', ')}")
-      @logger.info("Available resources: #{@resources.map(&:resource_name).join(', ')}")
+      @logger.info("Available tools: #{@tools.keys.join(", ")}")
+      @logger.info("Available resources: #{@resources.map(&:resource_name).join(", ")}")
 
       # Use STDIO transport by default
       @transport_klass = FastMcp::Transports::StdioTransport
@@ -113,8 +153,8 @@ module FastMcp
     # Start the server as a Rack middleware
     def start_rack(app, options = {})
       @logger.info("Starting MCP server as Rack middleware: #{@name} v#{@version}")
-      @logger.info("Available tools: #{@tools.keys.join(', ')}")
-      @logger.info("Available resources: #{@resources.map(&:resource_name).join(', ')}")
+      @logger.info("Available tools: #{@tools.keys.join(", ")}")
+      @logger.info("Available resources: #{@resources.map(&:resource_name).join(", ")}")
 
       # Use Rack transport
       transport_klass = FastMcp::Transports::RackTransport
@@ -127,8 +167,8 @@ module FastMcp
 
     def start_authenticated_rack(app, options = {})
       @logger.info("Starting MCP server as Authenticated Rack middleware: #{@name} v#{@version}")
-      @logger.info("Available tools: #{@tools.keys.join(', ')}")
-      @logger.info("Available resources: #{@resources.map(&:resource_name).join(', ')}")
+      @logger.info("Available tools: #{@tools.keys.join(", ")}")
+      @logger.info("Available resources: #{@resources.map(&:resource_name).join(", ")}")
 
       # Use Rack transport
       transport_klass = FastMcp::Transports::AuthenticatedRackTransport
@@ -151,39 +191,43 @@ module FastMcp
       begin
         request = JSON.parse(json_str)
       rescue JSON::ParserError, TypeError
-        return send_error(-32_600, 'Invalid Request', nil)
+        return send_error(-32_600, "Invalid Request", nil)
       end
 
       @logger.debug("Received request: #{request.inspect}")
 
-      method = request['method']
-      params = request['params'] || {}
-      id = request['id']
+      method = request["method"]
+      params = request["params"] || {}
+      id = request["id"]
 
       # Check if it's a valid JSON-RPC 2.0 request
-      return send_error(-32_600, 'Invalid Request', id) unless request['jsonrpc'] == '2.0'
+      return send_error(-32_600, "Invalid Request", id) unless request["jsonrpc"] == "2.0"
 
       case method
-      when 'ping'
+      when "ping"
         send_result({}, id)
-      when 'initialize'
+      when "initialize"
         handle_initialize(params, id)
-      when 'notifications/initialized'
+      when "notifications/initialized"
         handle_initialized_notification
-      when 'tools/list'
+      when "tools/list"
         handle_tools_list(id)
-      when 'tools/call'
+      when "tools/call"
         handle_tools_call(params, headers, id)
-      when 'resources/list'
+      when "resources/list"
         handle_resources_list(id)
-      when 'resources/templates/list'
+      when "resources/templates/list"
         handle_resources_templates_list(id)
-      when 'resources/read'
+      when "resources/read"
         handle_resources_read(params, id)
-      when 'resources/subscribe'
+      when "resources/subscribe"
         handle_resources_subscribe(params, id)
-      when 'resources/unsubscribe'
+      when "resources/unsubscribe"
         handle_resources_unsubscribe(params, id)
+      when "prompts/list"
+        handle_prompts_list(params, id)
+      when "prompts/get"
+        handle_prompts_get(params, id)
       when nil
         # This is a notification response, we don't need to handle it
         nil
@@ -202,13 +246,13 @@ module FastMcp
 
       resource = @resources[uri]
       notification = {
-        jsonrpc: '2.0',
-        method: 'notifications/resources/updated',
+        jsonrpc: "2.0",
+        method: "notifications/resources/updated",
         params: {
           uri: uri,
           name: resource.name,
-          mimeType: resource.mime_type
-        }
+          mimeType: resource.mime_type,
+        },
       }
 
       @transport.send_message(notification)
@@ -220,15 +264,15 @@ module FastMcp
 
     private
 
-    PROTOCOL_VERSION = '2024-11-05'
+    PROTOCOL_VERSION = "2024-11-05"
 
     def handle_initialize(params, id)
       # Store client capabilities for later use
-      @client_capabilities = params['capabilities'] || {}
-      client_info = params['clientInfo'] || {}
+      @client_capabilities = params["capabilities"] || {}
+      client_info = params["clientInfo"] || {}
 
       # Log client information
-      @logger.info("Client connected: #{client_info['name']} v#{client_info['version']}")
+      @logger.info("Client connected: #{client_info["name"]} v#{client_info["version"]}")
       # @logger.debug("Client capabilities: #{client_capabilities.inspect}")
 
       # Prepare server response
@@ -237,8 +281,8 @@ module FastMcp
         capabilities: @capabilities,
         serverInfo: {
           name: @name,
-          version: @version
-        }
+          version: @version,
+        },
       }
 
       @logger.info("Server response: #{response.inspect}")
@@ -248,9 +292,9 @@ module FastMcp
 
     # Handle a resource read
     def handle_resources_read(params, id)
-      uri = params['uri']
+      uri = params["uri"]
 
-      return send_error(-32_602, 'Invalid params: missing resource URI', id) unless uri
+      return send_error(-32_602, "Invalid params: missing resource URI", id) unless uri
 
       @logger.debug("Looking for resource with URI: #{uri}")
 
@@ -266,14 +310,14 @@ module FastMcp
         @logger.debug("Resource instance params: #{resource_instance.params.inspect}")
 
         result = if resource_instance.binary?
-                   {
-                     contents: [base_content.merge(blob: Base64.strict_encode64(resource_instance.content))]
+            {
+                     contents: [base_content.merge(blob: Base64.strict_encode64(resource_instance.content))],
                    }
-                 else
-                   {
-                     contents: [base_content.merge(text: resource_instance.content)]
+          else
+            {
+                     contents: [base_content.merge(text: resource_instance.content)],
                    }
-                 end
+          end
 
         # # rescue StandardError => e
         # @logger.error("Error reading resource: #{e.message}")
@@ -286,7 +330,7 @@ module FastMcp
       # The client is now ready for normal operation
       # No response needed for notifications
       @client_initialized = true
-      @logger.info('Client initialized, beginning normal operation')
+      @logger.info("Client initialized, beginning normal operation")
 
       nil
     end
@@ -296,8 +340,8 @@ module FastMcp
       tools_list = @tools.values.map do |tool|
         tool_info = {
           name: tool.tool_name,
-          description: tool.description || '',
-          inputSchema: tool.input_schema_to_json || { type: 'object', properties: {}, required: [] }
+          description: tool.description || "",
+          inputSchema: tool.input_schema_to_json || { type: "object", properties: {}, required: [] },
         }
 
         # Add annotations if they exist
@@ -320,10 +364,10 @@ module FastMcp
 
     # Handle tools/call request
     def handle_tools_call(params, headers, id)
-      tool_name = params['name']
-      arguments = params['arguments'] || {}
+      tool_name = params["name"]
+      arguments = params["arguments"] || {}
 
-      return send_error(-32_602, 'Invalid params: missing tool name', id) unless tool_name
+      return send_error(-32_602, "Invalid params: missing tool name", id) unless tool_name
 
       tool = @tools[tool_name]
       return send_error(-32_602, "Tool not found: #{tool_name}", id) unless tool
@@ -335,7 +379,7 @@ module FastMcp
         tool_instance = tool.new(headers: headers)
         authorized = tool_instance.authorized?(**symbolized_args)
 
-        return send_error(-32_602, 'Unauthorized', id) unless authorized
+        return send_error(-32_602, "Unauthorized", id) unless authorized
 
         result, metadata = tool_instance.call_with_schema_validation!(**symbolized_args)
 
@@ -358,8 +402,8 @@ module FastMcp
       else
         # Format the result according to the MCP specification
         formatted_result = {
-          content: [{ type: 'text', text: result.to_s }],
-          isError: false
+          content: [{ type: "text", text: result.to_s }],
+          isError: false,
         }
 
         send_result(formatted_result, id, metadata: metadata)
@@ -370,8 +414,8 @@ module FastMcp
     def send_error_result(message, id)
       # Format error according to the MCP specification
       error_result = {
-        content: [{ type: 'text', text: "Error: #{message}" }],
-        isError: true
+        content: [{ type: "text", text: "Error: #{message}" }],
+        isError: true,
       }
 
       send_result(error_result, id)
@@ -396,10 +440,10 @@ module FastMcp
     def handle_resources_subscribe(params, id)
       return unless @client_initialized
 
-      uri = params['uri']
+      uri = params["uri"]
 
       unless uri
-        send_error(-32_602, 'Invalid params: missing resource URI', id)
+        send_error(-32_602, "Invalid params: missing resource URI", id)
         return
       end
 
@@ -417,10 +461,10 @@ module FastMcp
     def handle_resources_unsubscribe(params, id)
       return unless @client_initialized
 
-      uri = params['uri']
+      uri = params["uri"]
 
       unless uri
-        send_error(-32_602, 'Invalid params: missing resource URI', id)
+        send_error(-32_602, "Invalid params: missing resource URI", id)
         return
       end
 
@@ -438,9 +482,52 @@ module FastMcp
       return unless @client_initialized
 
       notification = {
-        jsonrpc: '2.0',
-        method: 'notifications/resources/listChanged',
-        params: {}
+        jsonrpc: "2.0",
+        method: "notifications/resources/listChanged",
+        params: {},
+      }
+
+      @transport.send_message(notification)
+    end
+
+    # Handle prompts/list request
+    def handle_prompts_list(params, id)
+      return unless @client_initialized
+
+      # For now, no pagination is implemented - return all prompts
+      prompts_list = @prompts.values.map(&:to_list_hash)
+
+      result = { prompts: prompts_list }
+
+      send_result(result, id)
+    end
+
+    # Handle prompts/get request
+    def handle_prompts_get(params, id)
+      return unless @client_initialized
+
+      prompt_name = params["name"]
+      return send_error(-32_602, "Invalid params: missing prompt name", id) unless prompt_name
+
+      prompt = @prompts[prompt_name]
+      return send_error(-32_602, "Prompt '#{prompt_name}' not found", id) unless prompt
+
+      # Get arguments from params
+      arguments = params["arguments"] || {}
+
+      result = prompt.get_content(arguments)
+
+      send_result(result, id)
+    end
+
+    # Notify clients about prompts list changes
+    def notify_prompts_list_changed
+      return unless @client_initialized
+
+      notification = {
+        jsonrpc: "2.0",
+        method: "notifications/prompts/list_changed",
+        params: {},
       }
 
       @transport.send_message(notification)
@@ -451,9 +538,9 @@ module FastMcp
       result[:_meta] = metadata if metadata.is_a?(Hash) && !metadata.empty?
 
       response = {
-        jsonrpc: '2.0',
+        jsonrpc: "2.0",
         id: id,
-        result: result
+        result: result,
       }
 
       @logger.info("Sending result: #{response.inspect}")
@@ -463,12 +550,12 @@ module FastMcp
     # Send a JSON-RPC error response
     def send_error(code, message, id = nil)
       response = {
-        jsonrpc: '2.0',
+        jsonrpc: "2.0",
         error: {
           code: code,
-          message: message
+          message: message,
         },
-        id: id
+        id: id,
       }
 
       send_response(response)
