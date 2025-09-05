@@ -77,7 +77,7 @@ module FastMcp
         @logger.debug("Broadcasting message to #{@sse_clients.size} SSE clients: #{json_message}")
 
         clients_to_remove = []
-        
+
         # Get a snapshot of clients to avoid holding the mutex during IO operations
         clients_snapshot = nil
         @sse_clients_mutex.synchronize do
@@ -465,7 +465,7 @@ module FastMcp
         ping_count = 0
         ping_interval = 1 # Send a ping every 1 second
         @running = true
-        
+
         while @running && !io.closed?
           begin
             # Get mutex reference each time to avoid stale reference
@@ -473,15 +473,16 @@ module FastMcp
             @sse_clients_mutex.synchronize do
               client = @sse_clients[client_id]
             end
-            
+
             break unless client # Client was unregistered
+
             mutex = client[:mutex]
-            
+
             # Use timeout to prevent indefinite blocking
             Timeout.timeout(2) do
               mutex.synchronize { ping_count = send_keep_alive_ping(io, client_id, ping_count) }
             end
-            
+
             sleep ping_interval
           rescue Timeout::Error => e
             @logger.warn("Keep-alive timeout for client #{client_id}: #{e.message}")
@@ -523,18 +524,18 @@ module FastMcp
       # Clean up SSE connection
       def cleanup_sse_connection(client_id, io)
         @logger.info("Cleaning up SSE connection for client #{client_id}")
-        
+
         # Get the mutex before unregistering to avoid race condition
         client = nil
         @sse_clients_mutex.synchronize do
           client = @sse_clients[client_id]
         end
-        
+
         mutex = client && client[:mutex]
-        
+
         # Unregister the client first
         unregister_sse_client(client_id)
-        
+
         # Then close the IO with timeout to prevent hanging
         begin
           Timeout.timeout(5) do
@@ -548,7 +549,11 @@ module FastMcp
         rescue Timeout::Error => e
           @logger.error("Timeout closing IO for client #{client_id}: #{e.message}")
           # Force close without mutex if timeout occurs
-          io.close rescue nil
+          begin
+            io.close
+          rescue StandardError
+            nil
+          end
         rescue StandardError => e
           @logger.error("Error closing IO for client #{client_id}: #{e.message}")
         end

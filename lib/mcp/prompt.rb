@@ -12,7 +12,7 @@ module FastMcp
     # @param arguments [Array<Hash>] Optional arguments for customization
     def initialize(name:, description: nil, messages: [], arguments: [])
       @name = name
-      @description = description || ""
+      @description = description || ''
       @messages = messages
       @arguments = arguments || []
     end
@@ -26,10 +26,10 @@ module FastMcp
         arguments: @arguments.map do |arg|
           {
             name: arg[:name],
-            description: arg[:description] || "",
-            required: arg[:required] || false,
+            description: arg[:description] || '',
+            required: arg[:required] || false
           }
-        end,
+        end
       }
     end
 
@@ -37,14 +37,12 @@ module FastMcp
     # @param arguments [Hash] Arguments to populate in the prompt
     # @return [Hash] The complete prompt content
     def get_content(arguments = {})
-      result = {
+      {
         description: @description,
         messages: @messages.map do |message|
           process_message(message, arguments)
-        end,
+        end
       }
-
-      result
     end
 
     private
@@ -56,7 +54,7 @@ module FastMcp
     def process_message(message, arguments)
       processed = message.dup
 
-      if processed[:content].is_a?(Hash) && processed[:content][:type] == "text"
+      if processed[:content].is_a?(Hash) && processed[:content][:type] == 'text'
         # For text content, replace placeholders
         processed[:content][:text] = interpolate_text(processed[:content][:text], arguments)
       end
@@ -75,9 +73,7 @@ module FastMcp
         placeholder = "{{#{key}}}"
         # Handle newlines properly - don't convert to literal '\n'
         value_str = value.to_s
-        if result.include?(placeholder)
-          result = result.gsub(placeholder, value_str)
-        end
+        result = result.gsub(placeholder, value_str) if result.include?(placeholder)
       end
 
       result

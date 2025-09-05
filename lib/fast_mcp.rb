@@ -11,23 +11,23 @@ module FastMcp
 end
 
 # Require the core components
-require_relative "mcp/tool"
-require_relative "mcp/server"
-require_relative "mcp/resource"
-require_relative "mcp/prompt"
-require_relative "mcp/railtie" if defined?(Rails::Railtie)
+require_relative 'mcp/tool'
+require_relative 'mcp/server'
+require_relative 'mcp/resource'
+require_relative 'mcp/prompt'
+require_relative 'mcp/railtie' if defined?(Rails::Railtie)
 
 # Load generators if Rails is available
-require_relative "generators/fast_mcp/install/install_generator" if defined?(Rails::Generators)
+require_relative 'generators/fast_mcp/install/install_generator' if defined?(Rails::Generators)
 
 # Require all transport files
-require_relative "mcp/transports/base_transport"
-Dir[File.join(File.dirname(__FILE__), "mcp/transports", "*.rb")].each do |file|
+require_relative 'mcp/transports/base_transport'
+Dir[File.join(File.dirname(__FILE__), 'mcp/transports', '*.rb')].each do |file|
   require file
 end
 
 # Version information
-require_relative "mcp/version"
+require_relative 'mcp/version'
 
 # Convenience method to create a Rack middleware
 module FastMcp
@@ -45,8 +45,8 @@ module FastMcp
   # @yieldparam server [FastMcp::Server] The server to configure
   # @return [#call] The Rack middleware
   def self.rack_middleware(app, options = {})
-    name = options.delete(:name) || "mcp-server"
-    version = options.delete(:version) || "1.0.0"
+    name = options.delete(:name) || 'mcp-server'
+    version = options.delete(:version) || '1.0.0'
     logger = options.delete(:logger) || Logger.new
 
     server = FastMcp::Server.new(name: name, version: version, logger: logger)
@@ -72,8 +72,8 @@ module FastMcp
   # @yieldparam server [FastMcp::Server] The server to configure
   # @return [#call] The Rack middleware
   def self.authenticated_rack_middleware(app, options = {})
-    name = options.delete(:name) || "mcp-server"
-    version = options.delete(:version) || "1.0.0"
+    name = options.delete(:name) || 'mcp-server'
+    version = options.delete(:version) || '1.0.0'
     logger = options.delete(:logger) || Logger.new
 
     server = FastMcp::Server.new(name: name, version: version, logger: logger)
@@ -89,7 +89,7 @@ module FastMcp
   # @param tool [FastMcp::Tool] The tool to register
   # @return [FastMcp::Tool] The registered tool
   def self.register_tool(tool)
-    self.server ||= FastMcp::Server.new(name: "mcp-server", version: "1.0.0")
+    self.server ||= FastMcp::Server.new(name: 'mcp-server', version: '1.0.0')
     self.server.register_tool(tool)
   end
 
@@ -97,7 +97,7 @@ module FastMcp
   # @param tools [Array<FastMcp::Tool>] The tools to register
   # @return [Array<FastMcp::Tool>] The registered tools
   def self.register_tools(*tools)
-    self.server ||= FastMcp::Server.new(name: "mcp-server", version: "1.0.0")
+    self.server ||= FastMcp::Server.new(name: 'mcp-server', version: '1.0.0')
     self.server.register_tools(*tools)
   end
 
@@ -105,7 +105,7 @@ module FastMcp
   # @param resource [FastMcp::Resource] The resource to register
   # @return [FastMcp::Resource] The registered resource
   def self.register_resource(resource)
-    self.server ||= FastMcp::Server.new(name: "mcp-server", version: "1.0.0")
+    self.server ||= FastMcp::Server.new(name: 'mcp-server', version: '1.0.0')
     self.server.register_resource(resource)
   end
 
@@ -113,7 +113,7 @@ module FastMcp
   # @param resources [Array<FastMcp::Resource>] The resources to register
   # @return [Array<FastMcp::Resource>] The registered resources
   def self.register_resources(*resources)
-    self.server ||= FastMcp::Server.new(name: "mcp-server", version: "1.0.0")
+    self.server ||= FastMcp::Server.new(name: 'mcp-server', version: '1.0.0')
     self.server.register_resources(*resources)
   end
 
@@ -121,7 +121,7 @@ module FastMcp
   # @param prompt [FastMcp::Prompt] The prompt to register
   # @return [FastMcp::Prompt] The registered prompt
   def self.register_prompt(prompt)
-    self.server ||= FastMcp::Server.new(name: "mcp-server", version: "1.0.0")
+    self.server ||= FastMcp::Server.new(name: 'mcp-server', version: '1.0.0')
     self.server.register_prompt(prompt)
   end
 
@@ -129,7 +129,7 @@ module FastMcp
   # @param prompts [Array<FastMcp::Prompt>] The prompts to register
   # @return [Array<FastMcp::Prompt>] The registered prompts
   def self.register_prompts(*prompts)
-    self.server ||= FastMcp::Server.new(name: "mcp-server", version: "1.0.0")
+    self.server ||= FastMcp::Server.new(name: 'mcp-server', version: '1.0.0')
     self.server.register_prompts(*prompts)
   end
 
@@ -151,11 +151,11 @@ module FastMcp
   def self.mount_in_rails(app, options = {})
     # Default options
     name = options.delete(:name) || app.class.module_parent_name.underscore.dasherize
-    version = options.delete(:version) || "1.0.0"
+    version = options.delete(:version) || '1.0.0'
     logger = options[:logger] || Rails.logger
-    path_prefix = options.delete(:path_prefix) || "/mcp"
-    messages_route = options.delete(:messages_route) || "messages"
-    sse_route = options.delete(:sse_route) || "sse"
+    path_prefix = options.delete(:path_prefix) || '/mcp'
+    messages_route = options.delete(:messages_route) || 'messages'
+    sse_route = options.delete(:sse_route) || 'sse'
     authenticate = options.delete(:authenticate) || false
     allowed_origins = options[:allowed_origins] || default_rails_allowed_origins(app)
     allowed_ips = options[:allowed_ips] || FastMcp::Transports::RackTransport::DEFAULT_ALLOWED_IPS
@@ -171,10 +171,10 @@ module FastMcp
 
     # Choose the right middleware based on authentication
     self.server.transport_klass = if authenticate
-        FastMcp::Transports::AuthenticatedRackTransport
-      else
-        FastMcp::Transports::RackTransport
-      end
+                                    FastMcp::Transports::AuthenticatedRackTransport
+                                  else
+                                    FastMcp::Transports::RackTransport
+                                  end
 
     # Insert the middleware in the Rails middleware stack
     app.middleware.use(
@@ -188,7 +188,7 @@ module FastMcp
     hosts = rail_app.config.hosts
 
     hosts.map do |host|
-      if host.is_a?(String) && host.start_with?(".")
+      if host.is_a?(String) && host.start_with?('.')
         # Convert .domain to domain and *.domain
         host_without_dot = host[1..]
         [host_without_dot, Regexp.new(".*\.#{host_without_dot}")] # rubocop:disable Style/RedundantStringEscape
