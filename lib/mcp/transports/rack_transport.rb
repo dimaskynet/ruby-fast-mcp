@@ -3,6 +3,7 @@
 require 'json'
 require 'securerandom'
 require 'rack'
+require 'timeout'
 require_relative 'base_transport'
 
 module FastMcp
@@ -76,28 +77,40 @@ module FastMcp
         @logger.debug("Broadcasting message to #{@sse_clients.size} SSE clients: #{json_message}")
 
         clients_to_remove = []
+        
+        # Get a snapshot of clients to avoid holding the mutex during IO operations
+        clients_snapshot = nil
         @sse_clients_mutex.synchronize do
-          @sse_clients.each do |client_id, client|
-            stream = client[:stream]
-            mutex = client[:mutex]
-            next if stream.nil? || (stream.respond_to?(:closed?) && stream.closed?) || mutex.nil?
+          clients_snapshot = @sse_clients.dup
+        end
 
-            begin
+        # Send to each client without holding the global mutex
+        clients_snapshot.each do |client_id, client|
+          stream = client[:stream]
+          mutex = client[:mutex]
+          next if stream.nil? || (stream.respond_to?(:closed?) && stream.closed?) || mutex.nil?
+
+          begin
+            # Use timeout to prevent indefinite blocking
+            Timeout.timeout(2) do
               mutex.synchronize do
                 stream.write("data: #{json_message}\n\n")
                 stream.flush if stream.respond_to?(:flush)
               end
-            rescue Errno::EPIPE, IOError => e
-              @logger.info("Client #{client_id} disconnected: #{e.message}")
-              clients_to_remove << client_id
-            rescue StandardError => e
-              @logger.error("Error sending message to client #{client_id}: #{e.message}")
-              clients_to_remove << client_id
             end
+          rescue Timeout::Error => e
+            @logger.warn("Timeout sending to client #{client_id}: #{e.message}")
+            clients_to_remove << client_id
+          rescue Errno::EPIPE, IOError => e
+            @logger.info("Client #{client_id} disconnected: #{e.message}")
+            clients_to_remove << client_id
+          rescue StandardError => e
+            @logger.error("Error sending message to client #{client_id}: #{e.message}")
+            clients_to_remove << client_id
           end
         end
 
-        # Remove disconnected clients outside the loop to avoid modifying the hash during iteration
+        # Remove disconnected clients
         clients_to_remove.each { |client_id| unregister_sse_client(client_id) }
       end
 
@@ -452,11 +465,27 @@ module FastMcp
         ping_count = 0
         ping_interval = 1 # Send a ping every 1 second
         @running = true
-        mutex = @sse_clients[client_id] && @sse_clients[client_id][:mutex]
+        
         while @running && !io.closed?
           begin
-            mutex.synchronize { ping_count = send_keep_alive_ping(io, client_id, ping_count) }
+            # Get mutex reference each time to avoid stale reference
+            client = nil
+            @sse_clients_mutex.synchronize do
+              client = @sse_clients[client_id]
+            end
+            
+            break unless client # Client was unregistered
+            mutex = client[:mutex]
+            
+            # Use timeout to prevent indefinite blocking
+            Timeout.timeout(2) do
+              mutex.synchronize { ping_count = send_keep_alive_ping(io, client_id, ping_count) }
+            end
+            
             sleep ping_interval
+          rescue Timeout::Error => e
+            @logger.warn("Keep-alive timeout for client #{client_id}: #{e.message}")
+            break
           rescue Errno::EPIPE, IOError => e
             # Broken pipe or IO error - client disconnected
             @logger.error("SSE connection error for client #{client_id}: #{e.message}")
@@ -494,15 +523,32 @@ module FastMcp
       # Clean up SSE connection
       def cleanup_sse_connection(client_id, io)
         @logger.info("Cleaning up SSE connection for client #{client_id}")
-        mutex = @sse_clients[client_id] && @sse_clients[client_id][:mutex]
+        
+        # Get the mutex before unregistering to avoid race condition
+        client = nil
+        @sse_clients_mutex.synchronize do
+          client = @sse_clients[client_id]
+        end
+        
+        mutex = client && client[:mutex]
+        
+        # Unregister the client first
         unregister_sse_client(client_id)
+        
+        # Then close the IO with timeout to prevent hanging
         begin
-          if mutex
-            mutex.synchronize { io.close unless io.closed? }
-          else
-            io.close unless io.closed?
+          Timeout.timeout(5) do
+            if mutex
+              mutex.synchronize { io.close unless io.closed? }
+            else
+              io.close unless io.closed?
+            end
           end
           @logger.info("Successfully closed IO for client #{client_id}")
+        rescue Timeout::Error => e
+          @logger.error("Timeout closing IO for client #{client_id}: #{e.message}")
+          # Force close without mutex if timeout occurs
+          io.close rescue nil
         rescue StandardError => e
           @logger.error("Error closing IO for client #{client_id}: #{e.message}")
         end
